@@ -1,6 +1,6 @@
 # Sylvron Pulse · Home Core
 
-> **Beta 0.9.2** – looking for testers! Feedback & bugs: GitHub Issues or the Sylvron Discord.
+> **Beta 0.9.3** – looking for testers! Feedback & bugs: GitHub Issues or the Sylvron Discord.
 
 ![Pulse on PC, tablet and phone](docs/mockup.jpg)
 
@@ -73,6 +73,8 @@ Optional: if your Assist pipeline uses a conversation agent of its own (e.g. a l
 | `grid_power_invert` / `battery_power_invert` | false | flip sign conventions |
 | `waste_calendar` | auto | calendar entity (or list) with pickup dates |
 | `system_check` | true | daily hint |
+| `room_sensors` | auto | pick sensors per room, e.g. `Küche: {temperature: sensor.kueche_temp, humidity: sensor.kueche_feuchte}` (a `climate.*` entity works too) |
+| `rooms_exclude` | – | hide areas, e.g. `[Garage, Keller]` |
 | `rooms`, `power`, `persons`, `batteries`, `watch`, `muell`, `actions`, `weather`, `outdoor` | auto | own lists override detection |
 | `humidity_high` / `temp_low` / `battery_low` / `stale_hours` | 65 / 17 / 20 / 6 | alert thresholds |
 

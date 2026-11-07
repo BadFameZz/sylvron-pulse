@@ -1,4 +1,4 @@
-/* Sylvron Pulse 0.9.2-beta — (c) Sylvron / BadFameZz · MIT · https://github.com/BadFameZz/sylvron-pulse */
+/* Sylvron Pulse 0.9.3-beta — (c) Sylvron / BadFameZz · MIT · https://github.com/BadFameZz/sylvron-pulse */
 /* Sylvron Pulse – lokale Schriften (SIL OFL) & Three.js aus dem Paket: läuft ohne Internet */
 (() => {
   try { window.SylvronPulseThree = new URL('./three.module.min.js', import.meta.url).href; } catch (e) {}
@@ -11,7 +11,7 @@
 /* SYLVRON PULSE 5.0 — J.A.R.V.I.S. Home HUD · WebGL Core
  * (c) Sylvron / BadFameZz
  */
-const SP_VERSION = "0.9.2-beta";
+const SP_VERSION = "0.9.3-beta";
 const THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
 (() => {
   if (!document.getElementById("sylvron-pulse-fonts")) {
@@ -481,7 +481,8 @@ ha-card { position:relative; overflow:hidden; border-radius:20px; color:var(--tx
     });
     d.power = d.devices.reduce((a, b) => a + b.w, 0);
     d.rooms = c.rooms.map((r) => {
-      const t = num(st[r.temperature]), h = num(st[r.humidity]), ok = !isNaN(t);
+      const rv = (id, attr) => { const s = st[id]; if (s && id.startsWith("climate.")) { if (BAD.includes(s.state)) return NaN; const v = parseFloat(s.attributes[attr]); return isNaN(v) ? NaN : v; } return num(s); };
+      const t = r.temperature ? rv(r.temperature, "current_temperature") : NaN, h = r.humidity ? rv(r.humidity, "current_humidity") : NaN, ok = !isNaN(t);
       total++; if (ok) online++;
       if (!ok) ins.push({ sev: "crit", t: `${r.name}: kein Signal`, d: "Sensor / Batterie prüfen", e: r.temperature });
       else {
@@ -1247,22 +1248,53 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
     const isOut = (id) => /au(ss|ß)en|outdoor|outside|drau(ss|ß)en|balkon|garten/i.test(id + " " + fname(id));
     const out = {};
 
-    // Räume aus Bereichen
+    // Räume aus Bereichen – Temperatur/Feuchte mit Plausibilitäts-Bewertung
     const temps = all.filter((id) => id.startsWith("sensor.") && dc(id) === "temperature" && !isOut(id));
     const hums = all.filter((id) => id.startsWith("sensor.") && dc(id) === "humidity" && !isOut(id));
-    const rooms = [];
-    for (const a of Object.values(areas).sort((x, y) => low(x.name).localeCompare(low(y.name)))) {
-      const t = temps.filter((id) => areaOf(id) === a.area_id).sort((x, y) => (BAD.includes(st[x].state) ? 1 : 0) - (BAD.includes(st[y].state) ? 1 : 0));
-      if (!t.length) {
-        const ctl = all.some((id) => /^(light|switch|climate|cover|media_player|fan)\./.test(id) && areaOf(id) === a.area_id);
-        if (ctl) rooms.push({ name: a.name, area: a.area_id });
-        continue;
-      }
-      const h = hums.find((id) => areaOf(id) === a.area_id);
-      rooms.push({ name: a.name, temperature: t[0], humidity: h, area: a.area_id });
+    const devEnts = {};
+    for (const [id, e] of Object.entries(ents)) if (e && e.device_id) (devEnts[e.device_id] = devEnts[e.device_id] || []).push(id);
+    const sib = (id) => { const e = ents[id]; return (e && e.device_id && devEnts[e.device_id]) || []; };
+    const devOf = (id) => { const e = ents[id]; return (e && e.device_id && devs[e.device_id]) || {}; };
+    // Geräte-/Chip-Temperaturen (Schaltaktoren, Steckdosen, Geschirrspüler, Kühlschrank …) aussortieren
+    const NOT_ROOM = /intern|internal|device|ger(ae|ä)t|chip|cpu|board|wasser|water|boiler|vorlauf|r(ue|ü)cklauf|k(ue|ü)hl|gefrier|fridge|freezer|ofen|oven|herd|geschirr|dishwash|wasch|washer|trockner|dryer|akku|batter|plug|steckdose|aktor|schalt|relay|relais|dimmer|router|repeater|nas|server|drucker|printer|3d|motor|heizk(oe|ö)rper|ventil.*(oberfl|surface)/i;
+    const scoreT = (id, lo, hi) => {
+      const v = parseFloat(st[id].state), txt = id + " " + fname(id) + " " + (devOf(id).model || "") + " " + (devOf(id).name || "");
+      let sc = 0;
+      if (BAD.includes(st[id].state) || isNaN(v)) sc -= 4; else if (v < lo || v > hi) sc -= 6;
+      if (NOT_ROOM.test(txt)) sc -= 5;
+      const sb = sib(id);
+      if (sb.some((x) => /^(switch|light|media_player|vacuum|fan)\./.test(x))) sc -= 3;            // Aktor mit eingebautem Fühler
+      if (sb.some((x) => x.startsWith("climate.")) || /thermostat|wandthermostat|tc-it|wth|climate|raum|room|hygro|thermo/i.test(txt)) sc += 3;
+      if (!sb.some((x) => /^(switch|light|climate|media_player|cover)\./.test(x))) sc += 2;        // reiner Sensor
+      return sc;
+    };
+    const climAttr = (id, attr) => { const v = parseFloat((st[id] || {}).attributes && st[id].attributes[attr]); return isNaN(v) ? null : v; };
+    const cand = [];
+    for (const a of Object.values(areas)) {
+      const inA = (id) => areaOf(id) === a.area_id;
+      const tS = temps.filter(inA).map((id) => ({ id, sc: scoreT(id, 5, 35) }));
+      const cl = all.filter((id) => id.startsWith("climate.") && inA(id));
+      cl.forEach((id) => { const v = climAttr(id, "current_temperature"); if (v != null) tS.push({ id, sc: (v >= 5 && v <= 35 ? 1 : -6) + (/klima|ac\b|aircon/i.test(fname(id)) ? -1 : 0) }); });
+      tS.sort((x, y) => y.sc - x.sc);
+      const hS = hums.filter(inA).map((id) => ({ id, sc: scoreT(id, 10, 95) }));
+      cl.forEach((id) => { if (climAttr(id, "current_humidity") != null) hS.push({ id, sc: 0 }); });
+      hS.sort((x, y) => y.sc - x.sc);
+      const t = tS.length && tS[0].sc > -4 ? tS[0].id : null, h = hS.length && hS[0].sc > -4 ? hS[0].id : null;
+      const nCtl = all.filter((id) => /^(light|switch|climate|cover|media_player|fan|binary_sensor)\./.test(id) && inA(id)).length;
+      if (!t && !nCtl) continue;
+      cand.push({ room: t ? { name: a.name, temperature: t, humidity: h || undefined, area: a.area_id } : { name: a.name, area: a.area_id }, w: (t ? 100 : 0) + nCtl });
     }
+    const rooms = cand.sort((x, y) => y.w - x.w).slice(0, 12).map((c) => c.room).sort((x, y) => low(x.name).localeCompare(low(y.name)));
     if (!rooms.length) temps.slice(0, 8).forEach((id) => rooms.push({ name: fname(id).replace(/\s*(temperatur|temperature)\s*/i, " ").trim(), temperature: id }));
-    out.rooms = rooms.slice(0, 10);
+    // Eigene Wahl pro Raum: room_sensors: { Küche: { temperature: sensor.x, humidity: sensor.y } } · rooms_exclude: [Flur, Keller]
+    const raw = this._rawCfg || {}, ex = (raw.rooms_exclude || []).map(low), ov = raw.room_sensors || {};
+    const fixed = rooms.filter((r) => !ex.includes(low(r.name)));
+    for (const [nm, o] of Object.entries(ov)) {
+      const r = fixed.find((x) => low(x.name) === low(nm));
+      if (r) Object.assign(r, o || {});
+      else { const a = Object.values(areas).find((x) => low(x.name) === low(nm)); fixed.push(Object.assign({ name: a ? a.name : nm, area: a && a.area_id }, o || {})); }
+    }
+    out.rooms = fixed;
 
     // Strom: Leistungssensoren in W/kW, die größten zuerst
     const pw = all.filter((id) => id.startsWith("sensor.") && dc(id) === "power" && ["W", "kW"].includes(st[id].attributes.unit_of_measurement));
@@ -1430,7 +1462,9 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
     const h = this._hass, room = this._d.rooms[this._roomIdx]; if (!room) return;
     const cr = Object.assign({}, this._cfg.rooms[this._roomIdx] || {}, { name: room.name });
     const { area, list } = this._roomEntities(cr);
-    const st = (id) => h.states[id], nm = (id) => (st(id).attributes.friendly_name || id).replace(new RegExp("^" + room.name + "\\s*", "i"), "") || st(id).attributes.friendly_name;
+    const fold = (w) => w.toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss");
+    const dedupe = (n) => { const out = []; for (const w of String(n).split(/\s+/)) if (!out.length || fold(out[out.length - 1]) !== fold(w)) out.push(w); return out.join(" "); };
+    const st = (id) => h.states[id], nm = (id) => { const f = dedupe(st(id).attributes.friendly_name || id); return f.replace(new RegExp("^" + room.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s+", "i"), "") || f; };
     const dom = (id) => id.split(".")[0];
     const ctrl = list.filter((id) => CTRL.includes(dom(id))).sort((a, b) => CTRL.indexOf(dom(a)) - CTRL.indexOf(dom(b)));
     const sens = list.filter((id) => ["sensor", "binary_sensor"].includes(dom(id)) && id !== cr.temperature && id !== cr.humidity);
@@ -1450,11 +1484,21 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
         ${bri ? `<input type="range" min="1" max="100" value="${a.brightness ? Math.round((a.brightness / 255) * 100) : 0}" data-e="${id}" data-k="bri">` : ""}</div>`;
     };
     const unit = (id) => st(id).attributes.unit_of_measurement || "";
+    const val = (id) => {
+      const s = st(id), u = unit(id);
+      if (BAD.includes(s.state)) return "offline";
+      const v = Number(s.state);
+      if (!u || s.state === "" || isNaN(v)) return deState(s.state) + (u && !isNaN(v) ? " " + u : "");
+      const reg = (h.entities || {})[id] || {};
+      let p = reg.display_precision;
+      if (p == null) p = /^(W|VA|var|lx|ppm|µg\/m³|dB|dBm|s|min)$/.test(u) ? 0 : u === "%" ? 0 : /°|kW$|A$|V$|bar|hPa|mm/.test(u) ? 1 : /Wh$|m³|kg|l$|L$/.test(u) ? (Math.abs(v) < 10 ? 2 : 1) : 2;
+      return v.toLocaleString("de-DE", { minimumFractionDigits: 0, maximumFractionDigits: p }) + (u === "%" ? " %" : " " + u);
+    };
     const html = `<div class="rvh"><div><div class="rvt">Raum</div><div class="rvn">${esc(room.name)}</div></div>
       <div class="rvk"><div><b>${room.ok && !isNaN(room.t) ? room.t.toFixed(1) + "°" : "–"}</b><small>TEMPERATUR</small></div><div><b>${room.ok && !isNaN(room.h) ? Math.round(room.h) + "%" : "–"}</b><small>FEUCHTE</small></div></div></div>
       ${!area ? `<div class="rvempty">Diesem Raum ist in Home Assistant noch kein Bereich zugeordnet. Ordne die Sensoren und Geräte unter <b>Einstellungen → Bereiche</b> einem Bereich zu, dann erscheinen sie hier automatisch.</div>`
         : `${ctrl.length ? `<div class="rvs">Steuerung</div><div class="rvg">${ctrl.map(tile).join("")}</div>` : `<div class="rvempty">Keine steuerbaren Geräte in diesem Bereich.</div>`}
-        ${sens.length ? `<div class="rvs">Sensoren</div><div class="chips">${sens.slice(0, 16).map((id) => `<div class="chip2" data-e="${id}" data-k="more">${esc(nm(id))}<b>${esc(unit(id) ? st(id).state : deState(st(id).state))}${esc(unit(id))}</b></div>`).join("")}</div>` : ""}`}`;
+        ${sens.length ? `<div class="rvs">Sensoren</div><div class="chips">${sens.slice(0, 16).map((id) => `<div class="chip2" data-e="${id}" data-k="more">${esc(nm(id))}<b>${esc(val(id))}</b></div>`).join("")}</div>` : ""}`}`;
     if (html !== this._lastRoomHtml) {
       const focused = this._rv.querySelector("input:focus"); if (focused) return; // Slider nicht beim Ziehen neu zeichnen
       this._rv.querySelector(".rvb").innerHTML = html; this._lastRoomHtml = html;
