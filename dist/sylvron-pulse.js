@@ -1,4 +1,4 @@
-/* Sylvron Pulse 0.9.0-beta — (c) Sylvron / BadFameZz · MIT · https://github.com/BadFameZz/sylvron-pulse */
+/* Sylvron Pulse 0.9.1-beta — (c) Sylvron / BadFameZz · MIT · https://github.com/BadFameZz/sylvron-pulse */
 /* Sylvron Pulse – lokale Schriften (SIL OFL) & Three.js aus dem Paket: läuft ohne Internet */
 (() => {
   try { window.SylvronPulseThree = new URL('./three.module.min.js', import.meta.url).href; } catch (e) {}
@@ -11,7 +11,7 @@
 /* SYLVRON PULSE 5.0 — J.A.R.V.I.S. Home HUD · WebGL Core
  * (c) Sylvron / BadFameZz
  */
-const SP_VERSION = "0.9.0-beta";
+const SP_VERSION = "0.9.1-beta";
 const THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
 (() => {
   if (!document.getElementById("sylvron-pulse-fonts")) {
@@ -698,7 +698,7 @@ ha-card { position:relative; overflow:hidden; border-radius:20px; color:var(--tx
         ctx.fillStyle = room.ok ? "#8fe6ff" : "#ff3d6e"; ctx.fillRect(colX - side * 14 - 2, ly + 4, 4, 4);
         ctx.textAlign = side > 0 ? "left" : "right"; ctx.textBaseline = "alphabetic";
         ctx.font = "700 10.5px Rajdhani"; ctx.fillStyle = hl ? "#fff" : "rgba(170,220,255,.8)"; ctx.fillText(room.name.toUpperCase(), ex, ly);
-        ctx.font = "700 13px Orbitron"; ctx.fillStyle = room.ok ? "#fff" : col; ctx.fillText(room.ok ? `${f1(room.t)}°` : "OFFLINE", ex, ly + 21);
+        ctx.font = "700 13px Orbitron"; ctx.fillStyle = room.ok ? "#fff" : col; if (!room.ok || !isNaN(room.t)) ctx.fillText(room.ok ? `${f1(room.t)}°` : "OFFLINE", ex, ly + 21);
         if (room.ok && !isNaN(room.h)) { ctx.font = "500 10px JetBrains Mono"; ctx.fillStyle = "rgba(170,220,255,.6)"; ctx.fillText(`${Math.round(room.h)}%`, ex + side * 80, ly + 21); }
         nodes.push({ x: p.x, y: p.y, entity: room.entity, room: i, label: `${room.name.toUpperCase()} · ${room.ok ? f1(room.t) + "°" + (isNaN(room.h) ? "" : " · " + Math.round(room.h) + "% RH") : "KEIN SIGNAL"}` });
       });
@@ -2697,8 +2697,9 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
   .mhid:hover { color:#fff; }
   .mwaste { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid rgba(62,203,255,.15); }
   .mwaste .wl { width:100%; font-size:10px; letter-spacing:2.5px; color:var(--dim); text-transform:uppercase; }
-  .mwaste .wb { flex:1; min-width:64px; padding:6px 8px; text-align:center; border:1px solid rgba(62,203,255,.25); background:rgba(62,203,255,.05); }
-  .mwaste .wb b { display:block; font:700 15px 'Orbitron',sans-serif; color:#fff; } .mwaste .wb span { font-size:11px; letter-spacing:1px; color:var(--dim); }
+  .mwaste .wb { flex:1 1 0; min-width:58px; padding:5px 4px; text-align:center; border:1px solid rgba(62,203,255,.25); background:rgba(62,203,255,.05); overflow:hidden; }
+  .mwaste .wb b { display:block; font:700 12.5px 'Orbitron',sans-serif; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .mwaste .wb i { display:block; font-style:normal; font-size:10px; letter-spacing:1px; color:#9fd8ff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mwaste .wb span { display:block; font-size:11px; letter-spacing:.5px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .mwaste .wb.soon { border-color:#ffb23e; } .mwaste .wb.soon b { color:#ffb23e; } .mwaste .wb.now { border-color:#ff3d6e; } .mwaste .wb.now b { color:#ff3d6e; }`;
 
   /* ---------- Speicher: erledigt / später ---------- */
@@ -2818,8 +2819,10 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
     ms.sort((a, b) => a.v - b.v);
     let wbox = this._el.missions.querySelector(".mwaste");
     if (ms.length) {
-      const day = (v) => { if (v === 0) return "HEUTE"; if (v === 1) return "MORGEN"; const d = new Date(Date.now() + v * 864e5); return d.toLocaleDateString("de-DE", { weekday: "short" }).replace(".", "").toUpperCase() + " · " + v + " T"; };
-      const html = `<div class="wl">🗑 Nächste Abfuhr</div>` + ms.map((x) => `<div class="wb ${x.v === 0 ? "now" : x.v <= 1 ? "soon" : ""}"><b>${esc(day(x.v))}</b><span>${esc(x.name)}</span></div>`).join("");
+      const day = (v) => { if (v === 0) return ["HEUTE", "Abholung"]; if (v === 1) return ["MORGEN", "heute raus"]; const d = new Date(Date.now() + v * 864e5);
+        const wd = d.toLocaleDateString("de-DE", { weekday: "short" }).replace(".", "").toUpperCase();
+        return v <= 6 ? [wd, "in " + v + " Tagen"] : [wd, d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" })]; };
+      const html = `<div class="wl">🗑 Nächste Abfuhr</div>` + ms.map((x) => { const [a, b] = day(x.v); return `<div class="wb ${x.v === 0 ? "now" : x.v <= 1 ? "soon" : ""}" title="${esc(x.name)}"><b>${esc(a)}</b><i>${esc(b)}</i><span>${esc(x.name.replace(/\s*tonne$/i, "") || x.name)}</span></div>`; }).join("");
       if (!wbox) { wbox = document.createElement("div"); wbox.className = "mwaste"; }
       if (wbox.innerHTML !== html) wbox.innerHTML = html;
       if (this._el.missions.firstChild !== wbox) this._el.missions.insertBefore(wbox, this._el.missions.firstChild);
