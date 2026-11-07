@@ -1,4 +1,4 @@
-/* Sylvron Pulse 0.9.1-beta — (c) Sylvron / BadFameZz · MIT · https://github.com/BadFameZz/sylvron-pulse */
+/* Sylvron Pulse 0.9.2-beta — (c) Sylvron / BadFameZz · MIT · https://github.com/BadFameZz/sylvron-pulse */
 /* Sylvron Pulse – lokale Schriften (SIL OFL) & Three.js aus dem Paket: läuft ohne Internet */
 (() => {
   try { window.SylvronPulseThree = new URL('./three.module.min.js', import.meta.url).href; } catch (e) {}
@@ -11,7 +11,7 @@
 /* SYLVRON PULSE 5.0 — J.A.R.V.I.S. Home HUD · WebGL Core
  * (c) Sylvron / BadFameZz
  */
-const SP_VERSION = "0.9.1-beta";
+const SP_VERSION = "0.9.2-beta";
 const THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
 (() => {
   if (!document.getElementById("sylvron-pulse-fonts")) {
@@ -2648,11 +2648,11 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
   C.prototype._listen = function (...a) { this._lastVoiceAt = Date.now(); return origListen.apply(this, a); };
   const sayHook = C.prototype._say;
   C.prototype._say = function (text) {
-    const q = /\?\s*$/.test(String(text || "").trim());
+    const q = /\?\s*$/.test(String(text || "").trim()) || !!this._contFlag; this._contFlag = false;
     const byVoice = this._lastVoiceAt && Date.now() - this._lastVoiceAt < 45000;
     if (q && byVoice && this._voice && this._cfg.follow_up !== false && micOk()) {
       this._followN = (this._followN || 0) + 1;
-      this._wantFollow = this._followN <= 2; // höchstens 2× hintereinander nachfragen
+      this._wantFollow = this._followN <= (this._chatMode ? 8 : 2); // höchstens 2× hintereinander nachfragen
     } else { this._wantFollow = false; if (!q) this._followN = 0; }
     return sayHook.call(this, text);
   };
@@ -2667,6 +2667,125 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
       this._wantFollow = false;
       setTimeout(() => { if (!this._vstate && !this._mic) this._listen(); }, 350);
     }
+  };
+});
+
+})();
+/* ==== pulse-talk ==== */
+(() => {
+/* Sylvron Pulse · Gespräch & Sprachlog
+   - CORE spricht mit dem Gesprächsagenten deiner Assist-Pipeline (z. B. lokales LLM über Ollama)
+   - Gesprächskontext bleibt erhalten (conversation_id, 5 min)
+   - Nicht verstandene Sätze landen im Sprachlog (todo.pulse_sprachlog, sonst lokal pro Nutzer)
+   - „Das war falsch“ markiert die letzte Antwort fürs Training */
+customElements.whenDefined("sylvron-pulse-card").then(() => {
+  const C = customElements.get("sylvron-pulse-card");
+  if (!C || C.prototype._talkPatched) return;
+  C.prototype._talkPatched = true;
+
+  const pick = (a) => a[Math.floor(Math.random() * a.length)];
+  const LOG_KEY = "sylvron_pulse_voicelog";
+  const CTX_MS = 5 * 60 * 1000;
+  const FAIL_RX = /nicht verstanden|keine? .*gefunden|nicht helfen|sorry|couldn't|not aware|don't understand|kann ich nicht/i;
+  const WRONG_RX = /^(nein[, ]+)?(das war (falsch|nicht richtig)|falsch verstanden|das meinte ich nicht|du hast mich falsch verstanden|that was wrong)/i;
+
+  /* ---------- Gesprächsagent aus der Pipeline ---------- */
+  C.prototype._talkAgent = async function () {
+    if (this._cfg.agent) return this._cfg.agent;
+    if (this._agentCache && Date.now() - this._agentCache.at < 10 * 60 * 1000) return this._agentCache.id;
+    let id = null;
+    try {
+      const p = await this._hass.callWS({ type: "assist_pipeline/pipeline/get", ...(this._cfg.pipeline ? { pipeline_id: this._cfg.pipeline } : {}) });
+      id = (p && p.conversation_engine) || null;
+    } catch (e) { /* ältere HA-Versionen / keine Rechte */ }
+    this._agentCache = { id, at: Date.now() };
+    return id;
+  };
+  const isLLM = (id) => !!id && !/^(conversation\.home_assistant|homeassistant)$/.test(id);
+
+  /* ---------- Sprachlog ---------- */
+  C.prototype._vlAdd = async function (text, why, answer) {
+    if (this._cfg.voice_log === false || !text) return;
+    const byVoice = this._lastVoiceAt && Date.now() - this._lastVoiceAt < 45000;
+    const entry = { t: String(text).slice(0, 200), why, a: String(answer || "").slice(0, 160), src: byVoice ? "stimme" : "text", ts: new Date().toISOString() };
+    const ent = this._cfg.voice_log_list || "todo.pulse_sprachlog";
+    if (this._hass.states[ent]) {
+      try {
+        await this._hass.callService("todo", "add_item", { item: `${entry.t}`, description: `${why} · ${entry.src} · ${entry.ts.slice(0, 16).replace("T", " ")}${entry.a ? " · CORE: " + entry.a : ""}` }, { entity_id: ent });
+        return;
+      } catch (e) { /* Fallback unten */ }
+    }
+    try {
+      const cur = await this._hass.callWS({ type: "frontend/get_user_data", key: LOG_KEY });
+      const list = (cur && Array.isArray(cur.value) ? cur.value : []).concat(entry).slice(-200);
+      await this._hass.callWS({ type: "frontend/set_user_data", key: LOG_KEY, value: list });
+    } catch (e) { /* egal */ }
+  };
+
+  /* ---------- Gesprächsablauf ---------- */
+  C.prototype._ask = async function (text) {
+    this._log("DU ›", text); this._state("think");
+    if (this._mascot) this._mascot.lastAct = Date.now();
+    const now = Date.now();
+    if (this._convAt && now - this._convAt > CTX_MS) this._convId = null;
+    this._convAt = now;
+    const de = (window.SylvronPulseLang || "de") === "de";
+
+    // Training: letzte Antwort war falsch
+    if (WRONG_RX.test(text.trim()) && this._lastTurn) {
+      if (!this._lastTurn.failed) this._vlAdd(this._lastTurn.q, "falsch beantwortet", this._lastTurn.a);
+      const m = de ? pick(["Danke, hab ich mir notiert. Wie hättest du es gemeint?", "Okay, notiert. Was wolltest du stattdessen?"]) : "Thanks, noted. What did you mean?";
+      this._lastTurn = null; this._contFlag = true;
+      setTimeout(() => { this._log("CORE ›", m); this._say(m); }, 200);
+      return;
+    }
+
+    const agent = await this._talkAgent();
+    const llm = isLLM(agent);
+    this._chatMode = llm;
+
+    // 1) Schnelle lokale Befehle (Licht, Heizung, Müll, …)
+    let res = null;
+    const hadPending = !!(this._pendingFix && this._pendingFix.until > now);
+    try { res = this._brain(text); } catch (e) { console.warn("brain", e); }
+    // Mit LLM: CORE schaltet nur selbst (schnell); Fragen & Plaudern übernimmt das Sprachmodell
+    if (res && llm && !res.run && !(hadPending && /^(ja|nein|nee|jo|nö|klar|mach|okay|ok|lass|später)\b/i.test(text.trim()))) res = null;
+    if (res) {
+      if (res.run) { try { await res.run(); } catch (e) { res.say = (de ? "Hm, das hat nicht geklappt. " : "Hm, that didn't work. ") + (e.message || ""); } }
+      if (res.mood && this._mascot) this._mascot.joyUntil = res.mood === "happy" ? Date.now() + 3500 : 0;
+      this._lastTurn = { q: text, a: res.say }; this._contFlag = false;
+      setTimeout(() => { this._log("CORE ›", res.say); this._say(res.say); }, 250 + Math.random() * 350);
+      return;
+    }
+
+    // 2) Gesprächsagent (Assist oder LLM) – mit Kontext
+    try {
+      const r = await this._hass.callWS({ type: "conversation/process", text, language: window.SylvronPulseLang || "de",
+        conversation_id: this._convId || undefined, ...(agent ? { agent_id: agent } : {}) });
+      this._convId = r.conversation_id;
+      const resp = r.response || {};
+      let ans = (resp.speech && resp.speech.plain && resp.speech.plain.speech) || "";
+      const code = resp.data && resp.data.code;
+      const failed = !ans || resp.response_type === "error" || code === "no_intent_match" || (!llm && FAIL_RX.test(ans));
+      if (failed) {
+        this._vlAdd(text, code || "nicht verstanden", ans);
+        ans = de ? pick(["Hm, das hab ich nicht ganz verstanden. Sag's mir nochmal anders?", "Da muss ich passen. Kannst du es anders sagen?", "Sorry, da steh ich auf dem Schlauch. Versuch's mal anders?"])
+                 : "Sorry, I didn't get that. Could you say it differently?";
+      } else if (/^(okay|ok|erledigt|done)\.?$/i.test(ans.trim())) ans = de ? pick(["Erledigt.", "Ist gemacht.", "Alles klar.", "Okay, läuft."]) : "Done.";
+      this._contFlag = !!r.continue_conversation;
+      this._lastTurn = { q: text, a: ans, failed };
+      setTimeout(() => { this._log("CORE ›", ans); this._say(ans); }, 150);
+    } catch (e) {
+      const m = de ? "Ich komm gerade nicht an Home Assistant ran." : "I can't reach Home Assistant right now.";
+      this._log("CORE ›", m); this._say(m);
+    }
+  };
+
+  // Spracherkennung: „nichts verstanden“ ebenfalls protokollieren
+  const origLog = C.prototype._log;
+  C.prototype._log = function (who, msg) {
+    if (who === "CORE ›" && /Ich hab nichts verstanden/.test(String(msg))) this._vlAdd("(Stille / unverständlich)", "stt-no-text");
+    return origLog.apply(this, arguments);
   };
 });
 

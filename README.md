@@ -1,6 +1,6 @@
 # Sylvron Pulse · Home Core
 
-> **Beta 0.9.1** – looking for testers! Feedback & bugs: GitHub Issues or the Sylvron Discord.
+> **Beta 0.9.2** – looking for testers! Feedback & bugs: GitHub Issues or the Sylvron Discord.
 
 ![Pulse on PC, tablet and phone](docs/mockup.jpg)
 
@@ -44,6 +44,9 @@ Everything else is optional. Tip: use a **Panel** view for the full HUD.
 
 Then set both in Settings → Voice assistants. The microphone in the browser requires **https**. The built-in system check tells you what's missing.
 
+## Natural conversation (optional)
+CORE switches devices itself (instant). Questions and small talk go to the conversation agent of your Assist pipeline. Set a local LLM there (e.g. **Ollama**, enable *Prefer handling commands locally*) and CORE talks like a real conversation – with context and follow-up questions. Say **"that was wrong"** / **„das war falsch“** to flag an answer for training.
+
 ## Options
 | Option | Default | |
 |---|---|---|
@@ -55,6 +58,9 @@ Then set both in Settings → Voice assistants. The microphone in the browser re
 | `layout` | `jarvis` | start template: `jarvis` / `kompakt` / `wand` |
 | `layout_lock` | false | hide the layout button (kiosk) |
 | `follow_up` | true | keep listening after CORE asks a question |
+| `agent` | from pipeline | conversation agent, e.g. a local LLM (`conversation.ollama`) |
+| `voice_log` | true | log sentences CORE didn't understand (local only) |
+| `voice_log_list` | `todo.pulse_sprachlog` | to-do list for the log (create a *Local To-do* list with that name), otherwise stored per user |
 | `solar_power` / `battery_power` / `battery_soc` / `grid_power` | auto | override detected energy sensors |
 | `grid_power_invert` / `battery_power_invert` | false | flip sign conventions |
 | `waste_calendar` | auto | calendar entity (or list) with pickup dates |
