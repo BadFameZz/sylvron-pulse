@@ -56,6 +56,8 @@ CORE understands natural German commands and keeps the context – no language m
 Optional: if your Assist pipeline uses a conversation agent of its own (e.g. a local LLM), CORE hands small talk and questions to it.
 
 ## Options
+
+📘 **Deutsche Anleitung mit Beispielen: [Alles, was du einstellen kannst](docs/EINSTELLUNGEN.md)**
 | Option | Default | |
 |---|---|---|
 | `owner` | your HA user | how CORE addresses you |
