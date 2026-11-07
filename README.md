@@ -44,8 +44,16 @@ Everything else is optional. Tip: use a **Panel** view for the full HUD.
 
 Then set both in Settings → Voice assistants. The microphone in the browser requires **https**. The built-in system check tells you what's missing.
 
-## Natural conversation (optional)
-CORE switches devices itself (instant). Questions and small talk go to the conversation agent of your Assist pipeline. Set a local LLM there (e.g. **Ollama**, enable *Prefer handling commands locally*) and CORE talks like a real conversation – with context and follow-up questions. Say **"that was wrong"** / **„das war falsch“** to flag an answer for training.
+## Talking to CORE (no AI, no cloud)
+CORE understands natural German commands and keeps the context – no language model or API key needed:
+- **Follow-ups:** “Kitchen light off” → “and the bathroom?” → “back on” → “brighter”
+- **Several commands at once:** “Licht Küche aus und Fernseher an”, “Küche und Bad aus”
+- **Asks back** when something is missing: “Licht an” → “Which room?” → “Wohnzimmer”
+- **Weather tomorrow / weekend** from your weather entity
+- **Teach it:** if CORE doesn't know a phrase (“Kinoabend”), it asks whether to learn it – you say what it should do, done. “Was hast du gelernt?” / “Vergiss Kinoabend”
+- Say **“das war falsch”** to flag a wrong answer. Not understood sentences are logged locally (optional to-do list `todo.pulse_sprachlog`).
+
+Optional: if your Assist pipeline uses a conversation agent of its own (e.g. a local LLM), CORE hands small talk and questions to it.
 
 ## Options
 | Option | Default | |

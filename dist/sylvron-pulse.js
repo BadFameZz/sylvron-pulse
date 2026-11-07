@@ -1047,7 +1047,7 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
     if (has(t, "wer bist du", "wie heisst du", "was bist du"))
       return { say: pick(["Ich bin Core – sozusagen das Nervensystem von deinem Zuhause. Ich behalte alles im Blick und sag dir, wenn was ist.", "Core. Ich wohne in deinem Home Assistant und pass auf, dass hier alles läuft."]) };
     if (has(t, "was kannst du", "hilfe", "was geht alles"))
-      return { say: "Frag mich einfach normal: wie warm's im Bad ist, ob du 'ne Jacke brauchst, welcher Müll dran ist, wer zu Hause ist, was gerade Strom zieht. Ich kann auch die Heizung stellen, Licht schalten oder Robi losschicken." };
+      return { say: "Frag mich einfach normal: wie warm's im Bad ist, ob du 'ne Jacke brauchst, welcher Müll dran ist, wer zu Hause ist, was gerade Strom zieht. Ich kann auch die Heizung stellen, Licht schalten oder Robi losschicken. Und wenn ich etwas noch nicht kenne, bring es mir einfach bei." };
     if (has(t, "witz", "erzähl was lustiges", "erzaehl was lustiges"))
       return { say: pick(["Warum hat der Thermostat Therapie gemacht? Er hatte zu viele Temperaturschwankungen.", "Ich wollte einen Witz über Zigbee machen – aber er ist nicht angekommen.", "Was sagt ein Smart Home zum anderen? Bei dir brennt ja noch Licht!"]), mood: "happy" };
     if (has(t, "wie spät", "wie spaet", "uhrzeit", "wieviel uhr", "wie viel uhr")) {
@@ -2723,42 +2723,193 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
   };
 
   /* ---------- Gesprächsablauf ---------- */
-  C.prototype._ask = async function (text) {
-    this._log("DU ›", text); this._state("think");
+  /* ---------- Dialog-Engine (ohne KI, läuft bei jedem) ---------- */
+  const LEARN_KEY = "sylvron_pulse_learned";
+  const nrm = (s) => String(s || "").toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+    .replace(/['’`´]/g, "").replace(/[?!.,;:]/g, " ").replace(/\s+/g, " ").trim();
+  // Füllwörter & Höflichkeit weg: „Hey Core, kannst du bitte mal das Licht in der Küche ausmachen?“ → „das Licht in der Küche ausmachen“
+  const clean = (s) => String(s || "").trim()
+    .replace(/^(hey|hi|hallo|ok|okay|ähm|äh|also)?[\s,]*core[\s,:!]*/i, "")
+    .replace(/^(kannst|könntest|würdest|wuerdest|koenntest) du( mir)?( bitte| mal| doch| eben| kurz)*\s+/i, "")
+    .replace(/^(bitte|mal|doch|eben|kurz)\s+/i, "")
+    .replace(/\s+(bitte|mal|doch|eben|kurz)(?=\s|[?!.]?$)/gi, "")
+    .replace(/[?!.]+$/, "").trim() || String(s || "").trim();
+  const ACT_RX = /\b(aus|ausschalten|ausmachen|abschalten|an|ein|einschalten|anmachen|anschalten|auf|zu|\d{1,3}\s*(%|prozent))\b/;
+  const YES = /^(ja|jo|jep|jap|klar|gerne|gern|okay|ok|mach( das| ruhig)?|na klar|sicher|yes|bitte)\b/i;
+  const NO = /^(nein|nee|nö|noe|nicht|lass( mal)?|abbrechen|vergiss es|egal|no)\b/i;
+  const whatOf = (t) => /fernseh|\btv\b/.test(t) ? "Fernseher" : /steckdose/.test(t) ? "Steckdose" : /rollo|jalousie|rolladen/.test(t) ? "Rollo" : /ventilator/.test(t) ? "Ventilator" : "Licht";
+
+  C.prototype._learnLoad = async function () {
+    if (this._learned) return this._learned;
+    try { const r = await this._hass.callWS({ type: "frontend/get_user_data", key: LEARN_KEY }); this._learned = (r && r.value) || {}; }
+    catch (e) { this._learned = {}; }
+    return this._learned;
+  };
+  C.prototype._learnSave = async function () { try { await this._hass.callWS({ type: "frontend/set_user_data", key: LEARN_KEY, value: this._learned || {} }); } catch (e) {} };
+
+  // Brain einmal fragen, ohne zu sprechen
+  C.prototype._probe = function (text) { try { return this._brain(text); } catch (e) { return null; } };
+
+  // Wetter für morgen / die nächsten Tage (Forecast-Dienst von HA)
+  C.prototype._forecastAnswer = async function (t) {
+    const day = /uebermorgen/.test(t) ? 2 : /morgen/.test(t) && !/heute morgen/.test(t) ? 1 : /wochenende|samstag|sonntag/.test(t) ? "we" : null;
+    if (day === null || !/(wetter|regen|regnet|warm|kalt|grad|sonne|schnee|jacke|schirm|wind|temperatur)/.test(t)) return null;
+    const w = this._cfg.weather || Object.keys(this._hass.states).find((id) => id.startsWith("weather."));
+    if (!w) return null;
+    let fc = null;
+    try {
+      const r = await this._hass.callWS({ type: "call_service", domain: "weather", service: "get_forecasts", service_data: { type: "daily" }, target: { entity_id: w }, return_response: true });
+      fc = r && r.response && r.response[w] && r.response[w].forecast;
+    } catch (e) { return null; }
+    if (!fc || !fc.length) return null;
+    let i = day === "we" ? fc.findIndex((f) => [6, 0].includes(new Date(f.datetime).getDay())) : day;
+    if (i < 0 || !fc[i]) return null;
+    const f = fc[i], lbl = day === 1 ? "Morgen" : day === 2 ? "Übermorgen" : "Am " + new Date(f.datetime).toLocaleDateString("de-DE", { weekday: "long" });
+    const cond = { "clear-night": "klar", sunny: "sonnig", cloudy: "bewölkt", partlycloudy: "teils bewölkt", rainy: "regnerisch", pouring: "starker Regen", snowy: "Schnee", "snowy-rainy": "Schneeregen", fog: "neblig", windy: "windig", lightning: "Gewitter", "lightning-rainy": "Gewitter mit Regen", hail: "Hagel" }[f.condition] || "";
+    const hi = Math.round(f.temperature), lo = f.templow != null ? Math.round(f.templow) : null, rain = f.precipitation_probability;
+    let s = `${lbl} ${cond ? "wird's " + cond : "sieht's so aus"}, ${lo != null ? lo + " bis " + hi : hi} Grad`;
+    if (rain != null && rain >= 20) s += `, ${rain} Prozent Regenwahrscheinlichkeit`;
+    s += ".";
+    if (/jacke/.test(t)) s += hi < 10 ? " Jacke auf jeden Fall." : hi < 16 ? " Eine leichte Jacke reicht." : " Jacke brauchst du eher nicht.";
+    else if (/schirm|regen/.test(t)) s += rain >= 50 ? " Schirm einpacken!" : " Schirm kannst du wohl zu Hause lassen.";
+    return s;
+  };
+
+  // Folgebefehle aus dem Kontext: „und im Bad?“, „wieder an“, „heller“
+  C.prototype._contextCmd = function (t) {
+    const L = this._lastCtl; if (!L || Date.now() - L.at > CTX_MS) return null;
+    if (/^(und|auch|jetzt|dann)?\s*(wieder|nochmal)?\s*(an|ein|aus)( machen| schalten)?( bitte)?$/.test(t) || /^(mach|schalt)( es| das| sie| ihn)? (wieder )?(an|aus)$/.test(t)) {
+      const a = /aus$/.test(t) ? "aus" : "an";
+      return { text: L.base + " " + a };
+    }
+    if (/^(etwas |ein bisschen |noch )?(heller|dunkler|mehr|weniger)$/.test(t) || /^mach( es| das)? (etwas |ein bisschen |noch )?(heller|dunkler)$/.test(t)) {
+      return { step: /(dunkler|weniger)/.test(t) ? -25 : 25 };
+    }
+    const m = t.match(/^(und|auch|jetzt)?\s*(im|in der|in|bei|beim|fuer|das|die|den)?\s*([a-z0-9 ]{2,30}?)\s*(auch|noch|ebenfalls)?$/);
+    if (m && /^(und|auch)\b|(auch|ebenfalls)$/.test(t) && m[3] && !ACT_RX.test(t)) return { text: `${L.what} ${m[2] || ""} ${m[3]} ${L.action}`.replace(/\s+/g, " ") };
+    return null;
+  };
+
+  /* ---------- Gesprächsablauf ---------- */
+  C.prototype._ask = async function (raw) {
+    this._log("DU ›", raw); this._state("think");
     if (this._mascot) this._mascot.lastAct = Date.now();
-    const now = Date.now();
-    if (this._convAt && now - this._convAt > CTX_MS) this._convId = null;
+    const now = Date.now(), de = (window.SylvronPulseLang || "de") === "de";
+    if (this._convAt && now - this._convAt > CTX_MS) { this._convId = null; this._lastCtl = null; }
     this._convAt = now;
-    const de = (window.SylvronPulseLang || "de") === "de";
+    const reply = (say, opt = {}) => {
+      if (opt.mood && this._mascot) this._mascot.joyUntil = opt.mood === "happy" ? Date.now() + 3500 : 0;
+      this._lastTurn = { q: raw, a: say, failed: !!opt.failed }; this._contFlag = !!opt.cont;
+      if (!opt.ctl) this._lastCtl = null;
+      setTimeout(() => { this._log("CORE ›", say); this._say(say); }, opt.fast ? 120 : 250 + Math.random() * 300);
+    };
+    const text = de ? clean(raw) : raw.trim(), t = nrm(text);
 
     // Training: letzte Antwort war falsch
-    if (WRONG_RX.test(text.trim()) && this._lastTurn) {
+    if (WRONG_RX.test(raw.trim()) && this._lastTurn) {
       if (!this._lastTurn.failed) this._vlAdd(this._lastTurn.q, "falsch beantwortet", this._lastTurn.a);
-      const m = de ? pick(["Danke, hab ich mir notiert. Wie hättest du es gemeint?", "Okay, notiert. Was wolltest du stattdessen?"]) : "Thanks, noted. What did you mean?";
-      this._lastTurn = null; this._contFlag = true;
-      setTimeout(() => { this._log("CORE ›", m); this._say(m); }, 200);
-      return;
+      const q = this._lastTurn.q; this._teach = { phrase: q, step: "ask", until: now + 120e3 };
+      return reply(de ? `Danke, notiert. Soll ich lernen, was ich bei „${q}“ tun soll?` : "Thanks, noted. Should I learn what to do instead?", { cont: true });
     }
 
-    const agent = await this._talkAgent();
-    const llm = isLLM(agent);
+    // Beibringen-Dialog
+    const T = this._teach && this._teach.until > now ? this._teach : null;
+    if (T) {
+      if (T.step === "ask") {
+        if (YES.test(t)) { T.step = "what"; T.until = now + 120e3; return reply(`Okay. Was soll ich tun, wenn du „${T.phrase}“ sagst? Sag es so, wie ich es schon verstehe – zum Beispiel „Licht Wohnzimmer aus und Fernseher an“.`, { cont: true }); }
+        this._teach = null; if (NO.test(t)) return reply(pick(["Alles klar, dann nicht.", "Okay, kein Problem."]));
+      } else if (T.step === "what") {
+        if (NO.test(t)) { this._teach = null; return reply("Okay, abgebrochen."); }
+        const parts = text.split(/\s+(?:und dann|und danach|dann|und)\s+/i).map((x) => x.trim()).filter(Boolean);
+        const ok = parts.filter((p) => { const r = this._probe(p); return r && r.run; });
+        if (!ok.length || ok.length < parts.length) {
+          T.until = now + 120e3;
+          return reply(`Hm, ${ok.length ? "einen Teil davon" : "das"} kann ich selbst noch nicht ausführen. Sag es nochmal einfacher – zum Beispiel „Licht Küche aus“.`, { cont: true });
+        }
+        const L = await this._learnLoad(); L[nrm(T.phrase)] = { say: T.phrase, cmds: ok, at: new Date().toISOString() }; await this._learnSave();
+        this._teach = null;
+        return reply(`Gelernt! Wenn du „${T.phrase}“ sagst, mache ich: ${ok.join(", dann ")}. Willst du's gleich ausprobieren? Sag einfach „${T.phrase}“.`, { mood: "happy" });
+      }
+    }
+    // „Vergiss …“ / „Was hast du gelernt?“
+    const fm = t.match(/^vergiss (das mit |den befehl )?(.+)$/);
+    if (fm && fm[2] !== "es") { const L = await this._learnLoad(), k = Object.keys(L).find((x) => x === nrm(fm[2]) || x.includes(nrm(fm[2])));
+      if (k) { const s = L[k].say; delete L[k]; await this._learnSave(); return reply(`Okay, „${s}“ hab ich vergessen.`); } }
+    if (/was hast du (alles )?gelernt|was hab ich dir beigebracht/.test(t)) {
+      const L = await this._learnLoad(), ks = Object.values(L);
+      return reply(ks.length ? `Ich kenne ${ks.length === 1 ? "einen eigenen Befehl" : ks.length + " eigene Befehle"}: ${ks.map((x) => "„" + x.say + "“").join(", ")}.` : "Noch nichts. Wenn ich was nicht verstehe, frag ich, ob ich's lernen soll.");
+    }
+
+    // Rückfrage offen (welcher Raum?)
+    const S = this._slot && this._slot.until > now ? this._slot : null; this._slot = null;
+    if (S && !ACT_RX.test(t) && !NO.test(t) && t.split(" ").length <= 4) {
+      const r = this._probe(`${S.what} ${text} ${S.action}`);
+      if (r && r.run) { try { await r.run(); } catch (e) {} this._lastCtl = { what: S.what, action: S.action, base: `${S.what} ${text}`, at: now }; return reply(r.say, { mood: "happy", ctl: true }); }
+    }
+
+    // Selbst beigebrachte Befehle
+    const L = await this._learnLoad(), lk = L[t] || Object.values(L).find((x) => nrm(x.say) === t);
+    if (lk) {
+      for (const c of lk.cmds) { const r = this._probe(c); if (r && r.run) { try { await r.run(); } catch (e) {} } }
+      return reply(pick([`Mach ich – ${lk.say}.`, "Alles klar, läuft.", "Erledigt."]), { mood: "happy" });
+    }
+
+    const agent = await this._talkAgent(), llm = isLLM(agent);
     this._chatMode = llm;
 
-    // 1) Schnelle lokale Befehle (Licht, Heizung, Müll, …)
-    let res = null;
-    const hadPending = !!(this._pendingFix && this._pendingFix.until > now);
-    try { res = this._brain(text); } catch (e) { console.warn("brain", e); }
-    // Mit LLM: CORE schaltet nur selbst (schnell); Fragen & Plaudern übernimmt das Sprachmodell
-    if (res && llm && !res.run && !(hadPending && /^(ja|nein|nee|jo|nö|klar|mach|okay|ok|lass|später)\b/i.test(text.trim()))) res = null;
-    if (res) {
-      if (res.run) { try { await res.run(); } catch (e) { res.say = (de ? "Hm, das hat nicht geklappt. " : "Hm, that didn't work. ") + (e.message || ""); } }
-      if (res.mood && this._mascot) this._mascot.joyUntil = res.mood === "happy" ? Date.now() + 3500 : 0;
-      this._lastTurn = { q: text, a: res.say }; this._contFlag = false;
-      setTimeout(() => { this._log("CORE ›", res.say); this._say(res.say); }, 250 + Math.random() * 350);
-      return;
+    // Mehrere Befehle in einem Satz: „Licht Küche aus und Fernseher an“
+    if (/\s(und|dann)\s/.test(t) && ACT_RX.test(t)) {
+      const parts = text.split(/\s+(?:und dann|und danach|dann|und)\s+/i).map((x) => x.trim()).filter(Boolean);
+      if (parts.length > 1) {
+        // fehlende Aktion vom Nachbarn übernehmen: „Küche und Bad aus“
+        const acts = parts.map((p) => (nrm(p).match(ACT_RX) || [])[0]);
+        const full = parts.map((p, i) => acts[i] ? p : (acts.slice(i).find(Boolean) || acts.find(Boolean)) ? `${p} ${acts.slice(i).find(Boolean) || acts.find(Boolean)}` : p);
+        const rs = full.map((p) => this._probe(p));
+        if (rs.every((r) => r && r.run)) {
+          for (const r of rs) { try { await r.run(); } catch (e) {} }
+          const last = full[full.length - 1]; this._lastCtl = { what: whatOf(nrm(last)), action: (nrm(last).match(ACT_RX) || ["aus"])[0], base: nrm(last).replace(ACT_RX, "").trim(), at: now };
+          return reply(pick(["Erledigt, alles auf einmal.", "Okay, beides gemacht.", "Ist gemacht."]), { mood: "happy", ctl: true });
+        }
+      }
     }
 
-    // 2) Gesprächsagent (Assist oder LLM) – mit Kontext
+    // Folgebefehl aus dem Kontext
+    const cx = this._contextCmd(t);
+    if (cx && cx.step && this._lastCtl) {
+      const ids = (this._ctlTargets(nrm(this._lastCtl.base), ["light"]).ids || []).filter((id) => id.startsWith("light."));
+      if (ids.length) { for (const id of ids) { try { await this._hass.callService("light", "turn_on", { entity_id: id, brightness_step_pct: cx.step }); } catch (e) {} }
+        return reply(cx.step > 0 ? pick(["Etwas heller.", "Okay, heller."]) : pick(["Etwas dunkler.", "Okay, gedimmt."]), { mood: "happy", ctl: true }); }
+    }
+    if (cx && cx.text) {
+      const r = this._probe(cx.text);
+      if (r && r.run) { try { await r.run(); } catch (e) {}
+        const nt = nrm(cx.text); this._lastCtl = { what: whatOf(nt), action: (nt.match(ACT_RX) || [this._lastCtl.action])[0], base: nt.replace(ACT_RX, "").trim(), at: now };
+        return reply(r.say, { mood: "happy", ctl: true }); }
+    }
+
+    // Wetter morgen / übermorgen / Wochenende
+    if (de) { const fa = await this._forecastAnswer(t); if (fa) return reply(fa); }
+
+    // „Licht an“ ohne Raum → nachfragen
+    if (de && /^(das |die )?(licht|lampe|lampen|lichter)( bitte)? (an|aus|ein|anmachen|ausmachen|einschalten|ausschalten)$/.test(t)) {
+      const action = /aus/.test(t) ? "aus" : "an";
+      this._slot = { what: "Licht", action, until: now + 60e3 };
+      return reply(pick([`In welchem Raum soll ich das Licht ${action}machen?`, `Welches Licht – oder überall?`]), { cont: true });
+    }
+
+    // Lokale Befehle & Fragen (Licht, Heizung, Müll, …)
+    const hadPending = !!(this._pendingFix && this._pendingFix.until > now);
+    let res = this._probe(text);
+    if (res && llm && !res.run && !(hadPending && YES.test(t) || hadPending && NO.test(t))) res = null;
+    if (res) {
+      if (res.run) {
+        try { await res.run(); } catch (e) { res.say = (de ? "Hm, das hat nicht geklappt. " : "Hm, that didn't work. ") + (e.message || ""); }
+        if (ACT_RX.test(t)) this._lastCtl = { what: whatOf(t), action: (t.match(ACT_RX) || ["an"])[0], base: t.replace(ACT_RX, "").replace(/\b(machen|schalten)\b/, "").trim(), at: now };
+      }
+      return reply(res.say, { mood: res.mood, ctl: !!(res.run && this._lastCtl && this._lastCtl.at === now) });
+    }
+
+    // Home Assistant Assist (lokal, ohne KI) – oder ein eigener Gesprächsagent, falls eingerichtet
     try {
       const r = await this._hass.callWS({ type: "conversation/process", text, language: window.SylvronPulseLang || "de",
         conversation_id: this._convId || undefined, ...(agent ? { agent_id: agent } : {}) });
@@ -2769,15 +2920,16 @@ customElements.whenDefined("sylvron-pulse-card").then(() => {
       const failed = !ans || resp.response_type === "error" || code === "no_intent_match" || (!llm && FAIL_RX.test(ans));
       if (failed) {
         this._vlAdd(text, code || "nicht verstanden", ans);
-        ans = de ? pick(["Hm, das hab ich nicht ganz verstanden. Sag's mir nochmal anders?", "Da muss ich passen. Kannst du es anders sagen?", "Sorry, da steh ich auf dem Schlauch. Versuch's mal anders?"])
-                 : "Sorry, I didn't get that. Could you say it differently?";
-      } else if (/^(okay|ok|erledigt|done)\.?$/i.test(ans.trim())) ans = de ? pick(["Erledigt.", "Ist gemacht.", "Alles klar.", "Okay, läuft."]) : "Done.";
-      this._contFlag = !!r.continue_conversation;
-      this._lastTurn = { q: text, a: ans, failed };
-      setTimeout(() => { this._log("CORE ›", ans); this._say(ans); }, 150);
+        if (de && text.split(" ").length <= 8) {
+          this._teach = { phrase: text, step: "ask", until: now + 120e3 };
+          return reply(pick([`„${text}“ kenne ich noch nicht. Willst du es mir beibringen?`, `Das hab ich noch nicht gelernt. Soll ich mir merken, was ich bei „${text}“ tun soll?`]), { cont: true, failed: true });
+        }
+        return reply(de ? pick(["Hm, das hab ich nicht ganz verstanden. Sag's mir nochmal anders?", "Sorry, da steh ich auf dem Schlauch. Versuch's mal kürzer?"]) : "Sorry, I didn't get that. Could you say it differently?", { cont: true, failed: true });
+      }
+      if (/^(okay|ok|erledigt|done)\.?$/i.test(ans.trim())) ans = de ? pick(["Erledigt.", "Ist gemacht.", "Alles klar.", "Okay, läuft."]) : "Done.";
+      return reply(ans, { cont: !!r.continue_conversation, fast: true });
     } catch (e) {
-      const m = de ? "Ich komm gerade nicht an Home Assistant ran." : "I can't reach Home Assistant right now.";
-      this._log("CORE ›", m); this._say(m);
+      return reply(de ? "Ich komm gerade nicht an Home Assistant ran." : "I can't reach Home Assistant right now.", { fast: true });
     }
   };
 
