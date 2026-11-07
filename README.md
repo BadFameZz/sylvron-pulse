@@ -1,6 +1,6 @@
 # Sylvron Pulse · Home Core
 
-> **Beta 0.9** – looking for testers! Feedback & bugs: GitHub Issues or the Sylvron Discord.
+> **Beta 0.9.1** – looking for testers! Feedback & bugs: GitHub Issues or the Sylvron Discord.
 
 ![Pulse on PC, tablet and phone](docs/mockup.jpg)
 
@@ -23,7 +23,7 @@ Eine futuristische HUD-Karte für Home Assistant – dein Zuhause als lebendiger
 
 ## Installation
 ### HACS (recommended)
-1. HACS → ⋮ → *Custom repositories* → `https://github.com/BadFameZz/sylvron-pulse`, type **Dashboard**.
+1. Home Assistant 2026.11+: Settings → **Marketplace** → *Add via link*. Older versions: HACS → ⋮ → *Custom repositories*. Enter `https://github.com/BadFameZz/sylvron-pulse`, type **Dashboard**.
 2. Install **Sylvron Pulse**, reload the browser.
 3. Dashboard → *Add card* → **Sylvron Pulse · Home Core**. Done.
 
